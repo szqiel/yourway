@@ -5,28 +5,36 @@ import { generateQuiz } from "@/lib/gemini";
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { paperId } = body;
+    const { paperId, paperTitle, abstract } = body;
 
-    if (!paperId) {
-      return NextResponse.json({ error: "paperId is required" }, { status: 400 });
-    }
+    let title = paperTitle;
+    let paperAbstract = abstract;
 
-    // 1. Fetch the cached paper title and abstract from the database
-    const { data: paper, error: paperError } = await supabase
-      .from("cached_papers")
-      .select("title, abstract")
-      .eq("id", paperId)
-      .single();
+    if (!title || !paperAbstract) {
+      if (!paperId) {
+        return NextResponse.json({ error: "paperId or paperTitle/abstract are required" }, { status: 400 });
+      }
 
-    if (paperError || !paper) {
-      return NextResponse.json(
-        { error: "Paper not found in cache. Generate roadmap first." },
-        { status: 404 }
-      );
+      // 1. Fetch the cached paper title and abstract from the database
+      const { data: paper, error: paperError } = await supabase
+        .from("cached_papers")
+        .select("title, abstract")
+        .eq("id", paperId)
+        .single();
+
+      if (paperError || !paper) {
+        return NextResponse.json(
+          { error: "Paper not found in cache. Generate roadmap first." },
+          { status: 404 }
+        );
+      }
+
+      title = paper.title;
+      paperAbstract = paper.abstract || "";
     }
 
     // 2. Dynamically generate 3 MCQ questions from the abstract
-    const questions = await generateQuiz(paper.title, paper.abstract || "");
+    const questions = await generateQuiz(title, paperAbstract);
 
     return NextResponse.json({ questions });
   } catch (error: any) {

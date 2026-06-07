@@ -1,10 +1,6 @@
-import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
-
-const apiKey = process.env.GEMINI_API_KEY || "";
-const genAI = new GoogleGenerativeAI(apiKey);
-
-// Using the high-end gemini-2.5-pro model
-const MODEL_NAME = "gemini-2.5-pro";
+const apiKey = process.env.NVIDIA_API_KEY || "";
+const MODEL_NAME = process.env.NVIDIA_MODEL_NAME || "meta/llama-3.3-70b-instruct";
+const BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 
 export interface RoadmapNode {
   id: string;
@@ -14,6 +10,16 @@ export interface RoadmapNode {
   prerequisites: string[];
   searchQuery: string;
   paperId?: string; // Appended after Semantic Scholar search
+  paper?: {
+    id: string;
+    title: string;
+    authors: { name: string; authorId?: string }[];
+    abstract: string;
+    year: number;
+    citationCount: number;
+    doi: string;
+    pdfUrl: string;
+  };
 }
 
 export interface QuizQuestion {
@@ -24,15 +30,83 @@ export interface QuizQuestion {
 }
 
 /**
+ * Robust JSON parser that strips markdown code fences if returned by the LLM.
+ */
+function cleanAndParseJson(text: string): any {
+  if (!text) {
+    throw new Error("AI returned empty or null text.");
+  }
+  let cleaned = text.trim();
+  if (cleaned.startsWith("```")) {
+    cleaned = cleaned.replace(/^```json\s*/i, "")
+      .replace(/^```\s*/, "")
+      .replace(/\s*```$/, "")
+      .trim();
+  }
+  try {
+    return JSON.parse(cleaned);
+  } catch (err) {
+    console.error("Failed to parse JSON from text:", text);
+    throw new Error("AI output was not valid JSON. Please try again.");
+  }
+}
+
+/**
+ * Sends a chat completion request to NVIDIA NIM (OpenAI-compatible endpoint).
+ */
+export async function callNvidiaNim(
+  messages: { role: string; content: string }[],
+  systemInstruction?: string
+): Promise<string> {
+  if (!apiKey) {
+    throw new Error("NVIDIA_API_KEY is not configured in environment variables.");
+  }
+
+  const finalMessages = systemInstruction
+    ? [{ role: "system", content: systemInstruction }, ...messages]
+    : messages;
+
+  const res = await fetch(BASE_URL, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: MODEL_NAME,
+      messages: finalMessages,
+      temperature: 0.5,
+      max_tokens: 2048,
+    }),
+  });
+
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`NVIDIA NIM API error (${res.status}): ${errorText}`);
+  }
+
+  const data = await res.json();
+  if (!data.choices || data.choices.length === 0) {
+    throw new Error("NVIDIA NIM API returned empty choices.");
+  }
+
+  const message = data.choices[0].message;
+  if (!message || message.content === undefined || message.content === null) {
+    if (message.reasoning_content) {
+      throw new Error(
+        `NVIDIA NIM API model (${MODEL_NAME}) spent all of its tokens reasoning and did not produce any output content. Try increasing max_tokens or switching to a non-reasoning model like 'meta/llama-3.3-70b-instruct'.`
+      );
+    }
+    throw new Error("NVIDIA NIM API returned null or undefined content.");
+  }
+
+  return message.content;
+}
+
+/**
  * Generates the hierarchical structure of the learning roadmap based on a user's topic.
  */
 export async function generateRoadmapStructure(topic: string): Promise<RoadmapNode[]> {
-  if (!apiKey) {
-    throw new Error("GEMINI_API_KEY is not configured in environment variables.");
-  }
-
-  const model = genAI.getGenerativeModel({ model: MODEL_NAME });
-
   const prompt = `
 You are an elite academic curriculum designer and STEM researcher.
 Your task is to break down the STEM topic: "${topic}" into a structured learning roadmap (Skill Tree) consisting of exactly 6 to 9 milestones.
@@ -62,43 +136,12 @@ Enforce output as a JSON object matching this schema:
     }
   ]
 }
+
+Ensure the response contains ONLY the raw JSON block.
 `;
 
-  const result = await model.generateContent({
-    contents: [{ role: "user", parts: [{ text: prompt }] }],
-    generationConfig: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: SchemaType.OBJECT,
-        properties: {
-          nodes: {
-            type: SchemaType.ARRAY,
-            items: {
-              type: SchemaType.OBJECT,
-              properties: {
-                id: { type: SchemaType.STRING },
-                title: { type: SchemaType.STRING },
-                description: { type: SchemaType.STRING },
-                tier: {
-                  type: SchemaType.STRING,
-                },
-                prerequisites: {
-                  type: SchemaType.ARRAY,
-                  items: { type: SchemaType.STRING },
-                },
-                searchQuery: { type: SchemaType.STRING },
-              },
-              required: ["id", "title", "description", "tier", "prerequisites", "searchQuery"],
-            },
-          },
-        },
-        required: ["nodes"],
-      },
-    },
-  });
-
-  const text = result.response.text();
-  const data = JSON.parse(text);
+  const reply = await callNvidiaNim([{ role: "user", content: prompt }]);
+  const data = cleanAndParseJson(reply);
   return data.nodes;
 }
 
@@ -109,12 +152,6 @@ export async function generateQuiz(
   paperTitle: string,
   abstract: string
 ): Promise<QuizQuestion[]> {
-  if (!apiKey) {
-    throw new Error("GEMINI_API_KEY is not configured in environment variables.");
-  }
-
-  const model = genAI.getGenerativeModel({ model: MODEL_NAME });
-
   const prompt = `
 You are a university professor creating an active-recall assessment.
 Generate exactly 3 multiple-choice questions based on the abstract of the research paper: "${paperTitle}".
@@ -138,38 +175,11 @@ Enforce output as a JSON object matching this schema:
     }
   ]
 }
+
+Ensure the response contains ONLY the raw JSON block.
 `;
 
-  const result = await model.generateContent({
-    contents: [{ role: "user", parts: [{ text: prompt }] }],
-    generationConfig: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: SchemaType.OBJECT,
-        properties: {
-          questions: {
-            type: SchemaType.ARRAY,
-            items: {
-              type: SchemaType.OBJECT,
-              properties: {
-                question: { type: SchemaType.STRING },
-                options: {
-                  type: SchemaType.ARRAY,
-                  items: { type: SchemaType.STRING },
-                },
-                answerIndex: { type: SchemaType.INTEGER },
-                explanation: { type: SchemaType.STRING },
-              },
-              required: ["question", "options", "answerIndex", "explanation"],
-            },
-          },
-        },
-        required: ["questions"],
-      },
-    },
-  });
-
-  const text = result.response.text();
-  const data = JSON.parse(text);
+  const reply = await callNvidiaNim([{ role: "user", content: prompt }]);
+  const data = cleanAndParseJson(reply);
   return data.questions;
 }

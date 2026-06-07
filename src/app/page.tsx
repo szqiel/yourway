@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, BookOpen, Compass, Shield, Sparkle } from "@phosphor-icons/react";
+import { ArrowRight, BookOpen, Compass, Sparkle } from "@phosphor-icons/react";
 import { supabase } from "@/lib/supabase";
 
 interface RoadmapHistoryItem {
@@ -38,49 +38,93 @@ export default function Dashboard() {
     }
   }, []);
 
-  // Fetch roadmap metadata from Supabase
+  // Fetch roadmap metadata from Supabase / LocalStorage
   const fetchRoadmapHistory = async (ids: string[]) => {
-    try {
-      const { data, error: fetchError } = await supabase
-        .from("roadmaps")
-        .select("id, topic, created_at")
-        .in("id", ids);
+    const localIds = ids.filter((id) => id.startsWith("local-"));
+    const cloudIds = ids.filter((id) => !id.startsWith("local-"));
 
-      if (fetchError) throw fetchError;
+    const historyItems: RoadmapHistoryItem[] = [];
 
-      if (data) {
-        // Fetch completion rates for each roadmap
-        const enrichedHistory = await Promise.all(
-          data.map(async (item) => {
-            const { data: progress } = await supabase
-              .from("user_progress")
-              .select("status")
-              .eq("roadmap_id", item.id);
+    // 1. Load Local Roadmaps from localStorage
+    localIds.forEach((id) => {
+      try {
+        const savedRoadmapRaw = localStorage.getItem(`yourway_local_roadmap_${id}`);
+        if (savedRoadmapRaw) {
+          const saved = JSON.parse(savedRoadmapRaw);
+          const savedProgressRaw = localStorage.getItem(`yourway_local_progress_${id}`);
+          const progress = savedProgressRaw ? JSON.parse(savedProgressRaw) : [];
+          
+          let rate = 0;
+          if (progress.length > 0) {
+            const completed = progress.filter((p: any) => p.status === "completed").length;
+            rate = Math.round((completed / progress.length) * 100);
+          }
 
-            let rate = 0;
-            if (progress && progress.length > 0) {
-              const completed = progress.filter((p) => p.status === "completed").length;
-              rate = Math.round((completed / progress.length) * 100);
-            }
-
-            return {
-              id: item.id,
-              topic: item.topic,
-              created_at: item.created_at,
-              completionRate: rate,
-            };
-          })
-        );
-
-        // Sort by created date descending
-        enrichedHistory.sort(
-          (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-        );
-        setHistory(enrichedHistory);
+          historyItems.push({
+            id,
+            topic: saved.topic,
+            created_at: saved.created_at || new Date().toISOString(),
+            completionRate: rate,
+          });
+        }
+      } catch (e) {
+        console.error("Failed to parse local roadmap:", id, e);
       }
-    } catch (err) {
-      console.error("Error loading roadmap history:", err);
+    });
+
+    // 2. Load Cloud Roadmaps from Supabase
+    if (cloudIds.length > 0) {
+      try {
+        const { data, error: fetchError } = await supabase
+          .from("roadmaps")
+          .select("id, topic, created_at")
+          .in("id", cloudIds);
+
+        if (fetchError) throw fetchError;
+
+        if (data) {
+          const enrichedHistory = await Promise.all(
+            data.map(async (item) => {
+              try {
+                const { data: progress } = await supabase
+                  .from("user_progress")
+                  .select("status")
+                  .eq("roadmap_id", item.id);
+
+                let rate = 0;
+                if (progress && progress.length > 0) {
+                  const completed = progress.filter((p) => p.status === "completed").length;
+                  rate = Math.round((completed / progress.length) * 100);
+                }
+
+                return {
+                  id: item.id,
+                  topic: item.topic,
+                  created_at: item.created_at,
+                  completionRate: rate,
+                };
+              } catch (e) {
+                return {
+                  id: item.id,
+                  topic: item.topic,
+                  created_at: item.created_at,
+                  completionRate: 0,
+                };
+              }
+            })
+          );
+          historyItems.push(...enrichedHistory);
+        }
+      } catch (err) {
+        console.error("Error loading cloud roadmap history:", err);
+      }
     }
+
+    // Sort by created date descending
+    historyItems.sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+    setHistory(historyItems);
   };
 
   const handleGenerate = async (e: React.FormEvent) => {
@@ -106,6 +150,24 @@ export default function Dashboard() {
         throw new Error(data.error || "Generation failed");
       }
 
+      // Save to localStorage if it's a local roadmap (Supabase bypassed)
+      if (data.roadmapId.startsWith("local-")) {
+        const localRoadmap = {
+          id: data.roadmapId,
+          topic: data.topic,
+          nodes: data.nodes,
+          created_at: new Date().toISOString(),
+        };
+        localStorage.setItem(`yourway_local_roadmap_${data.roadmapId}`, JSON.stringify(localRoadmap));
+
+        // Initialize progress for local nodes
+        const localProgress = data.nodes.map((node: any) => ({
+          node_id: node.id,
+          status: node.tier === "foundational" ? "unlocked" : "locked",
+        }));
+        localStorage.setItem(`yourway_local_progress_${data.roadmapId}`, JSON.stringify(localProgress));
+      }
+
       // Save new roadmap ID to history in localStorage
       const savedIdsRaw = localStorage.getItem("yourway_roadmap_ids");
       const savedIds: string[] = savedIdsRaw ? JSON.parse(savedIdsRaw) : [];
@@ -124,7 +186,7 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="flex-1 w-full min-h-[100dvh] pixel-grid bg-bg-dark text-foreground px-6 md:px-12 py-16 flex flex-col justify-between max-w-[1400px] mx-auto select-none">
+    <div className="flex-1 w-full min-h-[100dvh] bg-transparent text-foreground px-6 md:px-12 py-16 flex flex-col justify-between max-w-[1400px] mx-auto select-none animate-scroll-entry">
       {/* Top HUD bar */}
       <header className="flex items-center justify-between border-[3px] border-black p-4 bg-panel-dark shadow-[4px_4px_0_0_#0c0d10] rounded-md mb-12">
         <div className="flex items-center gap-3">
@@ -135,18 +197,12 @@ export default function Dashboard() {
             YOURWAY // THE ROADMAP FORGER
           </span>
         </div>
-
-        {/* Human-Verified badge */}
-        <div className="flex items-center gap-2 bg-[#1e2e28] border-2 border-black px-3 py-1 text-retro-green font-pixel text-sm uppercase font-bold rounded">
-          <Shield size={16} weight="fill" />
-          100% Peer-Reviewed
-        </div>
       </header>
 
       {/* Main Asymmetric Split Layout */}
       <main className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-12 items-start mb-24">
         {/* Left Section: Hero & Prompt Generator (7 cols) */}
-        <section className="lg:col-span-7 flex flex-col justify-center animate-scroll-entry">
+        <section className="lg:col-span-7 flex flex-col justify-center">
           <div className="inline-flex items-center gap-2 text-retro-amber font-pixel text-lg uppercase mb-2">
             <Sparkle size={18} weight="fill" />
             Establish spatial learning paths
@@ -194,7 +250,7 @@ export default function Dashboard() {
               The Codex (Active Saves)
             </span>
             <span className="font-mono text-[10px] text-text-muted bg-[#1c1f26] border border-border-slate px-2 py-0.5 rounded">
-              {history.length} slots active
+              {history.length + 1} slots active
             </span>
           </div>
 
@@ -206,18 +262,39 @@ export default function Dashboard() {
                 <div className="h-3 bg-black/40 w-1/4"></div>
               </div>
             </div>
-          ) : history.length === 0 ? (
-            /* Typographic Empty State */
-            <div className="border-[3px] border-dashed border-black/40 rounded-lg p-8 text-center bg-[#171a21]/50 flex flex-col items-center justify-center py-16">
-              <Compass size={36} className="text-text-muted/40 mb-4" />
-              <h3 className="font-pixel text-xl text-white mb-2">No active journeys</h3>
-              <p className="text-xs font-mono text-text-muted max-w-[32ch]">
-                Input a STEM research topic to create your first learning skill tree.
-              </p>
-            </div>
           ) : (
             /* Roadmap list */
             <div className="flex flex-col gap-4 max-h-[500px] overflow-y-auto pr-2">
+              {/* Static Pinned Interactive Demo Slot */}
+              <div
+                onClick={() => router.push("/roadmap/demo")}
+                className="active-press rpg-panel p-5 cursor-pointer border-retro-amber/80 border-[3px] hover:border-retro-cyan flex flex-col justify-between h-28 group"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <span className="font-pixel text-[11px] text-retro-amber tracking-wider uppercase font-bold block leading-none mb-1">
+                      [ Pinned Offline Demo ]
+                    </span>
+                    <h3 className="font-pixel text-xl text-white leading-tight group-hover:text-retro-cyan transition-colors uppercase">
+                      Solid-State Sodium Batteries
+                    </h3>
+                  </div>
+                  <Compass size={20} className="text-retro-amber group-hover:text-retro-cyan" />
+                </div>
+                <div className="flex items-center gap-4 mt-2">
+                  <div className="flex-1 retro-progress-container">
+                    <div
+                      className="retro-progress-bar"
+                      style={{ width: "25%" }}
+                    ></div>
+                  </div>
+                  <span className="font-pixel text-sm text-retro-green font-bold min-w-[35px] text-right">
+                    25%
+                  </span>
+                </div>
+              </div>
+
+              {/* Dynamic DB Roadmap Slots */}
               {history.map((item) => (
                 <div
                   key={item.id}
@@ -225,7 +302,7 @@ export default function Dashboard() {
                   className="active-press rpg-panel p-5 cursor-pointer border-black/10 hover:border-retro-amber flex flex-col justify-between h-28 group"
                 >
                   <div className="flex items-start justify-between gap-4">
-                    <h3 className="font-pixel text-xl text-white leading-tight group-hover:text-retro-cyan transition-colors">
+                    <h3 className="font-pixel text-xl text-white leading-tight group-hover:text-retro-cyan transition-colors uppercase">
                       {item.topic}
                     </h3>
                     <BookOpen size={20} className="text-text-muted group-hover:text-retro-cyan" />
@@ -250,12 +327,9 @@ export default function Dashboard() {
         </section>
       </main>
 
-      {/* Footer Info */}
-      <footer className="border-t-3 border-black pt-6 flex flex-col sm:flex-row justify-between items-center text-text-muted font-mono text-[10px]">
+      {/* Footer Info (Copyright Centered, Powered By Removed) */}
+      <footer className="border-t-3 border-black pt-6 flex justify-center text-text-muted font-mono text-[10px]">
         <span>© 2026 YourWay. This is the Way.</span>
-        <span className="mt-2 sm:mt-0">
-          Powered by Gemini 2.5 Pro & Semantic Scholar API
-        </span>
       </footer>
     </div>
   );

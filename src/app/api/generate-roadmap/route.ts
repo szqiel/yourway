@@ -61,6 +61,17 @@ async function fetchPaperFromScholar(
   };
 }
 
+function isSupabaseConfigured(): boolean {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+  return (
+    url.length > 0 &&
+    !url.includes("your-project-id") &&
+    key.length > 0 &&
+    !key.includes("your-supabase-anon-key")
+  );
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -70,18 +81,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Topic is required" }, { status: 400 });
     }
 
-    if (!userId && !guestSessionId) {
-      return NextResponse.json(
-        { error: "Either userId or guestSessionId must be provided" },
-        { status: 400 }
-      );
-    }
+    const hasSupabase = isSupabaseConfigured();
 
     // 1. Get Client IP Address for Rate Limiting
     const ip = req.headers.get("x-forwarded-for") || "127.0.0.1";
 
-    // 2. Perform Rate Limiting check if user is not logged in (is a guest)
-    if (!userId) {
+    // 2. Perform Rate Limiting check if user is not logged in (is a guest) and database is available
+    if (hasSupabase && !userId) {
       const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
       const { count, error: countError } = await supabase
         .from("roadmaps")
@@ -104,7 +110,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 3. Generate the structural roadmap (Skill Tree nodes) via Gemini
+    // 3. Generate the structural roadmap (Skill Tree nodes) via AI
     const rawNodes = await generateRoadmapStructure(topic);
 
     // 4. Fetch and Cache paper metadata for each node
@@ -112,33 +118,55 @@ export async function POST(req: NextRequest) {
     for (const node of rawNodes) {
       const paper = await fetchPaperFromScholar(node.searchQuery, node.title);
 
-      // Cache paper metadata in Supabase cached_papers
-      const { error: cacheError } = await supabase.from("cached_papers").upsert(
-        {
+      if (hasSupabase) {
+        // Cache paper metadata in Supabase cached_papers
+        const { error: cacheError } = await supabase.from("cached_papers").upsert(
+          {
+            id: paper.paperId,
+            title: paper.title,
+            authors: paper.authors,
+            abstract: paper.abstract,
+            year: paper.year,
+            citation_count: paper.citationCount,
+            external_pdf_url: paper.pdfUrl,
+            doi: paper.doi,
+          },
+          { onConflict: "id" }
+        );
+
+        if (cacheError) {
+          console.error("Failed to cache paper in database:", cacheError);
+        }
+      }
+
+      // Associate the Semantic Scholar Paper ID and embed full paper metadata to the roadmap node
+      enrichedNodes.push({
+        ...node,
+        paperId: paper.paperId,
+        paper: {
           id: paper.paperId,
           title: paper.title,
           authors: paper.authors,
           abstract: paper.abstract,
           year: paper.year,
-          citation_count: paper.citationCount,
-          external_pdf_url: paper.pdfUrl,
+          citationCount: paper.citationCount,
           doi: paper.doi,
+          pdfUrl: paper.pdfUrl,
         },
-        { onConflict: "id" }
-      );
-
-      if (cacheError) {
-        console.error("Failed to cache paper in database:", cacheError);
-      }
-
-      // Associate the Semantic Scholar Paper ID to the roadmap node
-      enrichedNodes.push({
-        ...node,
-        paperId: paper.paperId,
       });
     }
 
-    // 5. Store the roadmap in the database
+    // 5. Save the roadmap (Store in DB if available, else return local ID)
+    if (!hasSupabase) {
+      const localId = `local-${Math.random().toString(36).substring(2, 15)}`;
+      return NextResponse.json({
+        roadmapId: localId,
+        topic,
+        nodes: enrichedNodes,
+        isLocal: true,
+      });
+    }
+
     const { data: roadmapData, error: roadmapError } = await supabase
       .from("roadmaps")
       .insert({
