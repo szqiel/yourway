@@ -1,26 +1,129 @@
 @import "tailwindcss";
 
+@theme {
+  --color-bg-dark: #121317;
+  --color-panel-dark: #1c1f26;
+  --color-panel-border: #0c0d10;
+  
+  --color-retro-cyan: #00f2fe;
+  --color-retro-amber: #ff9f1c;
+  --color-retro-green: #00f5a0;
+  --color-retro-red: #ff4d6d;
+  
+  /* Fonts */
+  --font-pixel: "VT323", "Fira Code", monospace;
+  --font-sans: "Geist Sans", "SF Pro Display", sans-serif;
+  --font-mono: "Geist Mono", "JetBrains Mono", monospace;
+
+  /* Easing */
+  --ease-out-custom: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --background: #121317;
+  --foreground: #f1f3f5;
 }
 
 body {
-  background: var(--background);
+  background-color: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
+  image-rendering: pixelated;
+}
+
+/* 2D Retro Game Grid */
+.pixel-grid {
+  background-size: 24px 24px;
+  background-image: 
+    linear-gradient(to right, rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+}
+
+/* Retro Game Panels */
+.rpg-panel {
+  background-color: #1c1f26;
+  border: 3px solid #000000;
+  box-shadow: 4px 4px 0 0 #0c0d10;
+  border-radius: 6px;
+}
+
+/* Retro Mechanical Push Button */
+.retro-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #262b35;
+  border: 3px solid #000000;
+  border-radius: 4px;
+  color: #ffffff;
+  font-family: var(--font-pixel);
+  font-size: 1.1rem;
+  letter-spacing: 0.05em;
+  box-shadow: 3px 3px 0 0 #0c0d10;
+  cursor: pointer;
+  transition: transform 50ms ease, box-shadow 50ms ease;
+  padding: 0.5rem 1.25rem;
+  user-select: none;
+}
+
+.retro-btn:hover:not(:disabled) {
+  background-color: #2e3542;
+  border-color: #ff9f1c;
+}
+
+.retro-btn:active:not(:disabled) {
+  transform: translate(3px, 3px);
+  box-shadow: 0 0 0 0 transparent;
+}
+
+.retro-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* RPG Health/Mana style Progress Bar */
+.retro-progress-container {
+  height: 16px;
+  background-color: #0c0d10;
+  border: 2px solid #000000;
+  border-radius: 3px;
+  overflow: hidden;
+  padding: 1px;
+}
+
+.retro-progress-bar {
+  height: 100%;
+  background-color: #00f5a0;
+  background-image: linear-gradient(to right, rgba(255,255,255,0.15) 50%, transparent 50%);
+  background-size: 8px 100%;
+  transition: width 300ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+/* Glowing slot style for items/nodes */
+.rpg-slot {
+  width: 56px;
+  height: 56px;
+  background-color: #121317;
+  border: 3px solid #000000;
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.5);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.rpg-slot.unlocked {
+  border-color: #00f2fe;
+  box-shadow: 0 0 8px rgba(0, 242, 254, 0.3), inset 0 2px 4px rgba(0,0,0,0.5);
+}
+
+.rpg-slot.completed {
+  border-color: #00f5a0;
+  background-color: rgba(0, 245, 160, 0.05);
+  box-shadow: 0 0 8px rgba(0, 245, 160, 0.3), inset 0 2px 4px rgba(0,0,0,0.5);
+}
+
+.rpg-slot.locked {
+  border-color: #ff4d6d;
+  opacity: 0.6;
 }
