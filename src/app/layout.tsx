@@ -20,7 +20,7 @@ const pixelFont = VT323({
 
 export const metadata: Metadata = {
   title: "YourWay — Custom AI Academic Roadmap Builder",
-  description: "Conquer academic information overload. Forge learning paths through peer-reviewed STEM literature, node by node, like an RPG.",
+  description: "Conquer academic information overload. Forge learning paths through peer-reviewed literature, node by node, like an RPG.",
 };
 
 export default function RootLayout({

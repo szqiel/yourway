@@ -225,7 +225,7 @@ export default function Profile() {
                         type="email"
                         value={email}
                         onChange={(e) => setEmail(e.target.value)}
-                        placeholder="your-email@stem.edu"
+                        placeholder="your-email@study.edu"
                         required
                         disabled={authLoading}
                         className="px-4 py-2.5 bg-[#171a21] border-[3px] border-black rounded text-xs text-white placeholder:text-text-muted/50 focus:outline-none focus:border-retro-cyan font-mono"

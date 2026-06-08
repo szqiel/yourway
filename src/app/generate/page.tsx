@@ -80,10 +80,10 @@ export default function GenerateRoadmap() {
   };
 
   const sampleTopics = [
-    "Solid-State Sodium Batteries",
-    "Perovskite Solar Cells Efficiency",
+    "Modern European History",
+    "Microeconomics Fundamentals",
+    "Introduction to Linguistics",
     "Generative AI Model Collapse",
-    "Quantum Key Distribution",
   ];
 
   return (
@@ -104,8 +104,8 @@ export default function GenerateRoadmap() {
               FORGE A NEW <span className="text-retro-cyan">WAY</span>.
             </h1>
             <p className="text-xs font-mono text-text-muted leading-relaxed max-w-[55ch] mb-8">
-              Input any STEM topic below. The AI will design a 3-tier milestone syllabus, 
-              query the Semantic Scholar API to find peer-reviewed scientific papers for each node, 
+              Input any academic topic or field of study below. The AI will design a 3-tier milestone syllabus, 
+              query the Semantic Scholar API to find peer-reviewed papers for each node, 
               and build your interactive skill tree.
             </p>
 
@@ -115,7 +115,7 @@ export default function GenerateRoadmap() {
                   type="text"
                   value={topic}
                   onChange={(e) => setTopic(e.target.value)}
-                  placeholder="Enter a STEM topic (e.g. Sodium Battery Electrolytes)..."
+                  placeholder="Enter any field of study (e.g. Modern European History)..."
                   disabled={loading}
                   className="flex-1 px-4 py-3 bg-[#171a21] border-[3px] border-black rounded text-sm text-white placeholder:text-text-muted/50 focus:outline-none focus:border-retro-cyan transition-colors font-mono"
                 />
@@ -153,10 +153,10 @@ export default function GenerateRoadmap() {
               </h3>
               <ul className="flex flex-col gap-3 font-mono text-xs text-text-muted">
                 <li>
-                  <strong className="text-white">Be specific:</strong> Instead of "chemistry", try <strong className="text-retro-cyan">"room-temperature sodium chemistry"</strong>.
+                  <strong className="text-white">Be specific:</strong> Instead of "history", try <strong className="text-retro-cyan">"Modern European History"</strong>.
                 </li>
                 <li>
-                  <strong className="text-white">Target STEM:</strong> The Semantic Scholar citation engines are tuned for science, technology, engineering, and mathematics literature.
+                  <strong className="text-white">Target Academic Concepts:</strong> The citation engines pull from millions of peer-reviewed papers across humanities, sciences, economics, and history.
                 </li>
                 <li>
                   <strong className="text-white">RPG Progression:</strong> You start with foundational nodes unlocked. To advance to intermediate and advanced nodes, you must pass active-recall quizzes.
