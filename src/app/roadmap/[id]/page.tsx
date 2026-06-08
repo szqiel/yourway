@@ -2,9 +2,9 @@
 
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, CircleNotch } from "@phosphor-icons/react";
+import { ArrowLeft, CircleNotch, Trash } from "@phosphor-icons/react";
 import { supabase } from "@/lib/supabase";
-import { RoadmapNode } from "@/lib/gemini";
+import { RoadmapNode } from "@/lib/llm";
 import RoadmapVisualizer from "@/components/RoadmapVisualizer";
 import NodeDrawer from "@/components/NodeDrawer";
 import Navbar from "@/components/Navbar";
@@ -154,6 +154,45 @@ export default function RoadmapWorkspace() {
     }
   };
 
+  const handleDeleteRoadmap = async () => {
+    if (id === "demo") return;
+    if (!confirm("Are you sure you want to permanently delete this pathway from your Codex?")) return;
+
+    setLoading(true);
+    try {
+      if (id.startsWith("local-")) {
+        // 1. Delete from Local Storage
+        localStorage.removeItem(`yourway_local_roadmap_${id}`);
+        localStorage.removeItem(`yourway_local_progress_${id}`);
+        
+        const savedIdsRaw = localStorage.getItem("yourway_roadmap_ids");
+        if (savedIdsRaw) {
+          let savedIds: string[] = JSON.parse(savedIdsRaw);
+          savedIds = savedIds.filter((cid) => cid !== id);
+          localStorage.setItem("yourway_roadmap_ids", JSON.stringify(savedIds));
+        }
+      } else {
+        // 2. Delete from Supabase
+        const { error } = await supabase.from("roadmaps").delete().eq("id", id);
+        if (error) throw error;
+
+        // Also remove ID from local history cache
+        const savedIdsRaw = localStorage.getItem("yourway_roadmap_ids");
+        if (savedIdsRaw) {
+          let savedIds: string[] = JSON.parse(savedIdsRaw);
+          savedIds = savedIds.filter((cid) => cid !== id);
+          localStorage.setItem("yourway_roadmap_ids", JSON.stringify(savedIds));
+        }
+      }
+
+      router.push("/dashboard");
+    } catch (err: any) {
+      console.error("Failed to delete roadmap:", err);
+      alert(`Failed to delete roadmap: ${err.message || err}`);
+      setLoading(false);
+    }
+  };
+
   // Callback to receive progress updates from drawer quiz submissions
   const handleProgressUpdate = (updatedProgress: ProgressState[]) => {
     setProgress(updatedProgress);
@@ -188,6 +227,17 @@ export default function RoadmapWorkspace() {
               </h1>
             </div>
           </div>
+
+          {!loading && id !== "demo" && (
+            <button
+              onClick={handleDeleteRoadmap}
+              className="retro-btn text-xs py-1.5 px-3 flex items-center gap-1.5 border-retro-red/50 hover:border-retro-red text-retro-red hover:bg-retro-red/10 cursor-pointer"
+              title="Delete Pathway"
+            >
+              <Trash size={14} />
+              <span className="hidden sm:inline">Delete Pathway</span>
+            </button>
+          )}
         </header>
 
         {/* Main Workspace Area */}
@@ -223,6 +273,7 @@ export default function RoadmapWorkspace() {
                   roadmapId={id}
                   nodeId={selectedNode.id}
                   nodeTitle={selectedNode.title}
+                  nodeDescription={selectedNode.description}
                   nodeTier={selectedNode.tier}
                   paperId={selectedNode.paperId || ""}
                   status={selectedProgress?.status || "locked"}

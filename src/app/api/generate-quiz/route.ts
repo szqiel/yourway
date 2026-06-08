@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
-import { generateQuiz } from "@/lib/gemini";
+import { generateQuiz } from "@/lib/llm";
 
 export async function POST(req: NextRequest) {
   try {

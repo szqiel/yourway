@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { BookOpen, Compass, Trophy, Plus } from "@phosphor-icons/react";
+import { BookOpen, Compass, Trophy, Plus, Trash } from "@phosphor-icons/react";
 import { supabase } from "@/lib/supabase";
 import Navbar from "@/components/Navbar";
 
@@ -143,6 +143,63 @@ export default function Dashboard() {
     setLoading(false);
   };
 
+  const handleDeleteRoadmap = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent navigating to the roadmap workspace
+    if (!confirm("Are you sure you want to delete this roadmap from your Codex?")) return;
+
+    try {
+      if (id.startsWith("local-")) {
+        // 1. Delete from Local Storage
+        localStorage.removeItem(`yourway_local_roadmap_${id}`);
+        localStorage.removeItem(`yourway_local_progress_${id}`);
+        
+        const savedIdsRaw = localStorage.getItem("yourway_roadmap_ids");
+        if (savedIdsRaw) {
+          let savedIds: string[] = JSON.parse(savedIdsRaw);
+          savedIds = savedIds.filter((cid) => cid !== id);
+          localStorage.setItem("yourway_roadmap_ids", JSON.stringify(savedIds));
+        }
+      } else {
+        // 2. Delete from Supabase
+        const { error } = await supabase.from("roadmaps").delete().eq("id", id);
+        if (error) throw error;
+
+        // Also remove ID from local history cache
+        const savedIdsRaw = localStorage.getItem("yourway_roadmap_ids");
+        if (savedIdsRaw) {
+          let savedIds: string[] = JSON.parse(savedIdsRaw);
+          savedIds = savedIds.filter((cid) => cid !== id);
+          localStorage.setItem("yourway_roadmap_ids", JSON.stringify(savedIds));
+        }
+      }
+
+      // 3. Update local state
+      const remainingHistory = history.filter(item => item.id !== id);
+      setHistory(remainingHistory);
+
+      // Re-calculate Stats
+      const total = remainingHistory.length;
+      let avg = 0;
+      let completedCount = 0;
+
+      if (total > 0) {
+        const sum = remainingHistory.reduce((acc, curr) => acc + (curr.completionRate || 0), 0);
+        avg = Math.round(sum / total);
+        completedCount = remainingHistory.filter((h) => h.completionRate === 100).length;
+      }
+
+      setStats({
+        totalRoadmaps: total,
+        averageProgress: avg,
+        completedPaths: completedCount,
+      });
+
+    } catch (err: any) {
+      console.error("Failed to delete roadmap:", err);
+      alert(`Failed to delete roadmap: ${err.message || err}`);
+    }
+  };
+
   return (
     <div className="flex-1 w-full min-h-[100dvh] bg-transparent text-foreground px-6 md:px-12 py-16 flex flex-col justify-between max-w-[1400px] mx-auto select-none animate-scroll-entry">
       <div className="flex flex-col gap-12 w-full">
@@ -249,10 +306,19 @@ export default function Dashboard() {
                   className="active-press rpg-panel p-5 cursor-pointer border-black/10 hover:border-retro-amber flex flex-col justify-between h-28 group"
                 >
                   <div className="flex items-start justify-between gap-4">
-                    <h3 className="font-pixel text-xl text-white leading-tight group-hover:text-retro-cyan transition-colors uppercase truncate pr-4">
+                    <h3 className="font-pixel text-xl text-white leading-tight group-hover:text-retro-cyan transition-colors uppercase truncate flex-1 pr-2">
                       {item.topic}
                     </h3>
-                    <BookOpen size={18} className="text-text-muted group-hover:text-retro-cyan" />
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={(e) => handleDeleteRoadmap(item.id, e)}
+                        className="text-text-muted hover:text-retro-red p-1 rounded transition-colors hover:bg-black/20"
+                        title="Delete Roadmap"
+                      >
+                        <Trash size={16} />
+                      </button>
+                      <BookOpen size={18} className="text-text-muted group-hover:text-retro-cyan" />
+                    </div>
                   </div>
                   <div className="flex items-center gap-4 mt-2">
                     <div className="flex-1 retro-progress-container">

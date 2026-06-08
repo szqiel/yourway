@@ -1,15 +1,16 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { X, BookOpen, Trophy, ShieldWarning, ArrowRight } from "@phosphor-icons/react";
+import { X, BookOpen, Trophy, ShieldWarning, ArrowRight, CircleNotch } from "@phosphor-icons/react";
 import { supabase } from "@/lib/supabase";
-import { QuizQuestion } from "@/lib/gemini";
+import { QuizQuestion } from "@/lib/llm";
 import confetti from "canvas-confetti";
 
 interface NodeDrawerProps {
   roadmapId: string;
   nodeId: string;
   nodeTitle: string;
+  nodeDescription: string;
   nodeTier: string;
   paperId: string;
   status: "locked" | "unlocked" | "completed";
@@ -23,6 +24,56 @@ interface NodeDrawerProps {
 interface Message {
   role: "user" | "model";
   content: string;
+}
+
+function renderMarkdown(text: string) {
+  if (!text) return null;
+  return text.split("\n").map((line, i) => {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("## ## ")) {
+      return (
+        <h3 key={i} className="font-pixel text-lg text-retro-amber mt-5 mb-3.5 uppercase font-bold tracking-wide border-b-2 border-retro-amber/30 pb-1">
+          {trimmed.replace("## ## ", "")}
+        </h3>
+      );
+    }
+    if (trimmed.startsWith("### ")) {
+      return (
+        <h4 key={i} className="font-pixel text-xs text-retro-cyan mt-4 mb-2 uppercase font-bold">
+          {trimmed.replace("### ", "")}
+        </h4>
+      );
+    }
+    if (trimmed.startsWith("## ")) {
+      return (
+        <h3 key={i} className="font-pixel text-sm text-retro-amber mt-4.5 mb-2 uppercase font-bold">
+          {trimmed.replace("## ", "")}
+        </h3>
+      );
+    }
+    if (trimmed.startsWith("# ")) {
+      return (
+        <h2 key={i} className="font-pixel text-md text-white mt-5 mb-2.5 uppercase font-bold">
+          {trimmed.replace("# ", "")}
+        </h2>
+      );
+    }
+    if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
+      return (
+        <li key={i} className="ml-4 list-disc text-[11px] text-[#e0e4eb] font-mono leading-relaxed mb-1.5">
+          {trimmed.substring(2)}
+        </li>
+      );
+    }
+    if (trimmed === "") {
+      return <div key={i} className="h-1.5" />;
+    }
+    return (
+      <p key={i} className="text-[11px] text-[#b4bcce] font-mono leading-relaxed mb-2">
+        {line}
+      </p>
+    );
+  });
 }
 
 // Static mock papers for demo
@@ -213,6 +264,7 @@ export default function NodeDrawer({
   roadmapId,
   nodeId,
   nodeTitle,
+  nodeDescription,
   nodeTier,
   paperId,
   status,
@@ -226,6 +278,11 @@ export default function NodeDrawer({
   const [activeTab, setActiveTab] = useState<"summary" | "chat" | "trial">("summary");
   const [paper, setPaper] = useState<any>(null);
   const [loadingPaper, setLoadingPaper] = useState(true);
+
+  // AI Study Guide / Summarization State
+  const [aiSummary, setAiSummary] = useState<string | null>(null);
+  const [aiSummaryLoading, setAiSummaryLoading] = useState(false);
+  const [aiSummaryError, setAiSummaryError] = useState<string | null>(null);
 
   // Quiz State
   const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([]);
@@ -242,6 +299,10 @@ export default function NodeDrawer({
   const [chatLoading, setChatLoading] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
+  // Sci-Hub State
+  const [resolvingSciHub, setResolvingSciHub] = useState(false);
+  const [sciHubUrl, setSciHubUrl] = useState<string | null>(null);
+
   // Load Paper Metadata when drawer opens/changes
   useEffect(() => {
     fetchPaperDetails();
@@ -253,6 +314,10 @@ export default function NodeDrawer({
     setQuizSubmitted(false);
     setQuizFinalScore(null);
     setQuizError(null);
+    setSciHubUrl(null);
+    setAiSummary(null);
+    setAiSummaryLoading(false);
+    setAiSummaryError(null);
     setChatMessages([
       {
         role: "model",
@@ -260,6 +325,67 @@ export default function NodeDrawer({
       },
     ]);
   }, [paperId]);
+
+
+  // Sync pre-resolved Sci-Hub URL if available
+  useEffect(() => {
+    if (paper?.sciHubUrl) {
+      setSciHubUrl(paper.sciHubUrl);
+    }
+  }, [paper]);
+
+  // Automatically trigger paper summarization if not cached
+  useEffect(() => {
+    if (!paper) {
+      setAiSummary(null);
+      return;
+    }
+
+    if (paper.ai_summary) {
+      setAiSummary(paper.ai_summary);
+      return;
+    }
+
+    // Mock summary for demo
+    if (roadmapId === "demo") {
+      setAiSummary(
+        `## ## MILESTONE GUIDE: ${nodeTitle.toUpperCase()}\n\n### 1. Milestone Concept Alignment\nThis demo paper outlines the foundation of sodium-ion battery chemistry, which is critical for this node. It outlines how sodium's larger ionic radius (1.02 Å vs 0.76 Å for Li) affects capacity and volume changes.\n\n### 2. Deep Dive Methodology & Findings\n- Analyzed cathode insertion structures (O3, P2-type layering).\n- Evaluated hard carbon anode insertion mechanics.\n- Investigated solid-electrolyte interphase (SEI) passivation stability.\n\n### 3. Essential Takeaways\n- Sodium-ion offers 20-30% lower cost but ~15% lower energy density.\n- Hard carbon holds sodium via adsorption/intercalation processes.\n\n### 4. Limitations & Challenges\n- Low ionic conductivity at room temperature limits rate capability.\n- Soluble interphase layers lead to continuous capacity fade.`
+      );
+      return;
+    }
+
+    const fetchSummary = async () => {
+      setAiSummaryLoading(true);
+      setAiSummaryError(null);
+      try {
+        const res = await fetch("/api/summarize-paper", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            paperId: paper.id,
+            doi: paper.doi,
+            title: paper.title,
+            abstract: paper.abstract,
+            nodeTitle,
+            nodeDescription,
+          }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Failed to generate study guide.");
+        setAiSummary(data.summary);
+        // Also update the local paper object state
+        setPaper((prev: any) => prev ? { ...prev, ai_summary: data.summary } : null);
+      } catch (err: any) {
+        console.error("Error generating paper summary:", err);
+        setAiSummaryError(err.message || "Failed to compile Milestone Guide.");
+      } finally {
+        setAiSummaryLoading(false);
+      }
+    };
+
+    fetchSummary();
+  }, [paper, nodeId, roadmapId, nodeTitle, nodeDescription]);
 
   // Scroll to bottom of chat
   useEffect(() => {
@@ -290,6 +416,32 @@ export default function NodeDrawer({
       console.error("Error loading cached paper:", err);
     } finally {
       setLoadingPaper(false);
+    }
+  };
+
+  const handleOpenSciHub = async () => {
+    if (!paper?.doi) return;
+
+    if (sciHubUrl) {
+      window.open(sciHubUrl, "_blank");
+      return;
+    }
+
+    setResolvingSciHub(true);
+    try {
+      const res = await fetch(`/api/scihub?doi=${encodeURIComponent(paper.doi)}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to resolve mirror.");
+
+      setSciHubUrl(data.url);
+      window.open(data.url, "_blank");
+    } catch (err) {
+      console.error("SciHub resolution error:", err);
+      const fallback = `https://sci-hub.se/${paper.doi}`;
+      setSciHubUrl(fallback);
+      window.open(fallback, "_blank");
+    } finally {
+      setResolvingSciHub(false);
     }
   };
 
@@ -656,6 +808,35 @@ export default function NodeDrawer({
                   </div>
                 </div>
 
+                {/* Milestone Guide Section */}
+                <div className="border-t-3 border-black pt-6">
+                  <h4 className="font-pixel text-lg uppercase text-retro-cyan mb-3 font-bold flex items-center gap-2">
+                    <BookOpen size={16} className="text-retro-cyan" />
+                    Quest Milestone Guide
+                  </h4>
+                  
+                  {aiSummaryLoading && (
+                    <div className="flex flex-col items-center justify-center p-6 bg-[#1a1c22] border-2 border-black border-dashed rounded gap-3">
+                      <CircleNotch size={24} className="animate-spin text-retro-cyan" />
+                      <p className="text-[10px] font-pixel text-retro-cyan text-center uppercase tracking-wider animate-pulse max-w-[30ch]">
+                        Decoding full-text paper & synthesizing study guide...
+                      </p>
+                    </div>
+                  )}
+
+                  {aiSummaryError && (
+                    <div className="p-4 bg-retro-red/10 border-2 border-retro-red rounded">
+                      <p className="text-xs font-mono text-retro-red">{aiSummaryError}</p>
+                    </div>
+                  )}
+
+                  {aiSummary && (
+                    <div className="bg-[#161a22] border-3 border-black p-5 rounded-md shadow-[4px_4px_0_0_#000] overflow-y-auto max-h-[350px]">
+                      {renderMarkdown(aiSummary)}
+                    </div>
+                  )}
+                </div>
+
                 {/* Abstract */}
                 <div className="border-t-3 border-black pt-6">
                   <h4 className="font-pixel text-lg uppercase text-retro-cyan mb-3 font-bold">
@@ -667,27 +848,45 @@ export default function NodeDrawer({
                 </div>
 
                 {/* Citation & DOI badges */}
-                <div className="border-t-3 border-black pt-6 flex flex-col sm:flex-row gap-3">
+                <div className="border-t-3 border-black pt-6 flex flex-col gap-3">
                   {paper.doi && (
-                    <a
-                      href={`https://doi.org/${paper.doi}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="retro-btn text-xs text-center flex-1 py-2 px-3 justify-center"
+                    <button
+                      onClick={handleOpenSciHub}
+                      disabled={resolvingSciHub}
+                      className="active-press w-full inline-flex items-center justify-center bg-retro-cyan text-black border-3 border-black rounded-md px-4 py-2.5 font-pixel text-base font-bold shadow-[3px_3px_0_0_#0c0d10] hover:bg-retro-cyan/90 active:translate-y-[3px] active:shadow-[0_0_0_0_transparent] cursor-pointer disabled:opacity-50"
                     >
-                      DOI Link
-                    </a>
+                      {resolvingSciHub ? (
+                        <>
+                          <CircleNotch size={16} className="animate-spin mr-2" />
+                          <span>Locating Mirror...</span>
+                        </>
+                      ) : (
+                        <span>Open in Sci-Hub</span>
+                      )}
+                    </button>
                   )}
-                  {paper.external_pdf_url && (
-                    <a
-                      href={paper.external_pdf_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="active-press flex-1 inline-flex items-center justify-center bg-retro-amber text-black border-3 border-black rounded-md px-4 py-2 font-pixel text-base font-bold shadow-[3px_3px_0_0_#0c0d10] hover:bg-retro-amber/90 active:translate-y-[3px] active:shadow-[0_0_0_0_transparent]"
-                    >
-                      Download PDF
-                    </a>
-                  )}
+                  <div className="flex flex-col sm:flex-row gap-3 w-full">
+                    {paper.doi && (
+                      <a
+                        href={`https://doi.org/${paper.doi}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="retro-btn text-xs text-center flex-1 py-2 px-3 justify-center"
+                      >
+                        DOI Link
+                      </a>
+                    )}
+                    {paper.external_pdf_url && (
+                      <a
+                        href={paper.external_pdf_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="retro-btn text-xs text-center flex-1 py-2 px-3 justify-center"
+                      >
+                        Standard PDF
+                      </a>
+                    )}
+                  </div>
                 </div>
               </div>
             )}

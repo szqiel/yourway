@@ -2,7 +2,7 @@
 
 import { useState, useRef, useMemo } from "react";
 import { BookOpen, Check, LockKey } from "@phosphor-icons/react";
-import { RoadmapNode } from "@/lib/gemini";
+import { RoadmapNode } from "@/lib/llm";
 
 interface ProgressState {
   node_id: string;
