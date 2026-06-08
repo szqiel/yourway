@@ -2,7 +2,7 @@
 
 import { useState, useRef, useMemo } from "react";
 import { BookOpen, Check, LockKey } from "@phosphor-icons/react";
-import { RoadmapNode } from "@/lib/llm";
+import { MockNode as RoadmapNode } from "@/lib/mockData";
 
 interface ProgressState {
   node_id: string;
@@ -141,7 +141,7 @@ export default function RoadmapVisualizer({
             if (!childPos) return null;
 
             return (
-              node.prerequisites?.map((prereqId) => {
+              node.prerequisites?.map((prereqId: string) => {
                 const parentPos = nodePositions[prereqId];
                 if (!parentPos) return null;
 

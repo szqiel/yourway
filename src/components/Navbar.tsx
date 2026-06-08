@@ -1,33 +1,14 @@
 "use client";
 
-import { useState, useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { BookOpen, Compass, Gear, User } from "@phosphor-icons/react";
-import { supabase } from "@/lib/supabase";
+import { BookOpen, Compass, User } from "@phosphor-icons/react";
 
 export default function Navbar() {
   const pathname = usePathname();
   const router = useRouter();
-  const [user, setUser] = useState<any>(null);
-
-  useEffect(() => {
-    // 1. Get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
-    });
-
-    // 2. Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
 
   const navItems = [
     { name: "Dashboard", path: "/dashboard", icon: BookOpen },
-    { name: "Forge Path", path: "/generate", icon: Compass },
-    { name: "Codex Profile", path: "/profile", icon: Gear },
   ];
 
   return (
@@ -69,9 +50,9 @@ export default function Navbar() {
 
       {/* User Session HUD Badge */}
       <div className="flex items-center gap-2 font-mono text-[10px] bg-[#121317] border border-black px-3 py-1.5 rounded text-text-muted">
-        <User size={12} className={user ? "text-retro-green" : "text-retro-amber"} />
+        <User size={12} className="text-retro-amber" />
         <span className="uppercase font-bold tracking-wider font-pixel text-xs">
-          {user ? `USER: ${user.email}` : "SLOT: GUEST SESSION"}
+          SLOT: OFFLINE DEMO
         </span>
       </div>
     </header>
