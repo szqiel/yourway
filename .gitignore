@@ -43,3 +43,5 @@ next-env.d.ts
 *.md
 !README.md
 /Targeted
+/skills-lock.json
+/.agents
