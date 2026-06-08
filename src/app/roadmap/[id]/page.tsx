@@ -2,12 +2,11 @@
 
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, CircleNotch, Trash } from "@phosphor-icons/react";
-import { supabase } from "@/lib/supabase";
-import { RoadmapNode } from "@/lib/llm";
+import { ArrowLeft, CircleNotch } from "@phosphor-icons/react";
 import RoadmapVisualizer from "@/components/RoadmapVisualizer";
 import NodeDrawer from "@/components/NodeDrawer";
 import Navbar from "@/components/Navbar";
+import { MOCK_ROADMAPS } from "@/lib/mockData";
 
 interface ProgressState {
   node_id: string;
@@ -15,180 +14,53 @@ interface ProgressState {
   quiz_score?: number;
 }
 
-// Static mockup dataset for Offline Demo Mode
-const DEMO_NODES: RoadmapNode[] = [
-  {
-    id: "node-1",
-    title: "Sodium Chemistry Basics",
-    description: "Foundational chemistry of sodium cells compared to lithium-ion batteries.",
-    tier: "foundational",
-    prerequisites: [],
-    searchQuery: "sodium battery chemistry review",
-    paperId: "demo-paper-1",
-  },
-  {
-    id: "node-2",
-    title: "Solid Polymer Electrolytes",
-    description: "Developing safe polymer solid-state materials for room temperature conductivity.",
-    tier: "intermediate",
-    prerequisites: ["node-1"],
-    searchQuery: "solid polymer electrolytes sodium",
-    paperId: "demo-paper-2",
-  },
-  {
-    id: "node-3",
-    title: "Ceramic Solid Electrolytes",
-    description: "Investigating NASICON-type crystalline materials and grain boundaries.",
-    tier: "intermediate",
-    prerequisites: ["node-1"],
-    searchQuery: "nasicon type solid electrolyte",
-    paperId: "demo-paper-3",
-  },
-  {
-    id: "node-4",
-    title: "SEI Layer Passivation",
-    description: "Mitigating sodium metal dendrite growths at the solid interphase.",
-    tier: "advanced",
-    prerequisites: ["node-2", "node-3"],
-    searchQuery: "sodium dendrite prevention sei",
-    paperId: "demo-paper-4",
-  },
-];
-
-const DEMO_INITIAL_PROGRESS: ProgressState[] = [
-  { node_id: "node-1", status: "completed", quiz_score: 3 },
-  { node_id: "node-2", status: "unlocked" },
-  { node_id: "node-3", status: "unlocked" },
-  { node_id: "node-4", status: "locked" },
-];
-
 export default function RoadmapWorkspace() {
   const params = useParams();
   const router = useRouter();
   const id = params.id as string;
 
   const [roadmap, setRoadmap] = useState<any>(null);
-  const [nodes, setNodes] = useState<RoadmapNode[]>([]);
+  const [nodes, setNodes] = useState<any[]>([]);
   const [progress, setProgress] = useState<ProgressState[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [guestSessionId, setGuestSessionId] = useState("");
 
-  // Retrieve Guest Session ID and load data
   useEffect(() => {
-    const sessionId = localStorage.getItem("yourway_guest_session_id") || "";
-    setGuestSessionId(sessionId);
-
     if (id) {
-      if (id === "demo") {
-        loadDemoWorkspace();
-      } else {
-        loadRoadmapData(id, sessionId);
-      }
+      loadRoadmapData(id);
     }
   }, [id]);
 
-  // Load local static mockup workspace for demo
-  const loadDemoWorkspace = () => {
-    setLoading(true);
-    setError(null);
-    setRoadmap({ topic: "Solid-State Sodium Batteries (Demo)" });
-    setNodes(DEMO_NODES);
-    setProgress(DEMO_INITIAL_PROGRESS);
-    setLoading(false);
-  };
-
-  const loadRoadmapData = async (roadmapId: string, sessionId: string) => {
+  const loadRoadmapData = async (roadmapId: string) => {
     setLoading(true);
     setError(null);
     try {
-      if (roadmapId.startsWith("local-")) {
-        const savedRoadmapRaw = localStorage.getItem(`yourway_local_roadmap_${roadmapId}`);
-        if (!savedRoadmapRaw) {
-          throw new Error("Local learning path (roadmap) not found.");
-        }
-        const roadmapData = JSON.parse(savedRoadmapRaw);
-        setRoadmap(roadmapData);
-        setNodes(roadmapData.nodes);
+      const mockRoadmap = MOCK_ROADMAPS[roadmapId];
+      if (!mockRoadmap) {
+        throw new Error("Offline Demo learning path not found.");
+      }
 
-        const savedProgressRaw = localStorage.getItem(`yourway_local_progress_${roadmapId}`);
-        const progressData = savedProgressRaw ? JSON.parse(savedProgressRaw) : [];
-        setProgress(progressData);
+      setRoadmap({ topic: mockRoadmap.topic });
+      setNodes(mockRoadmap.nodes);
+
+      // Load progress from local storage
+      const savedProgressRaw = localStorage.getItem(`yourway_demo_progress_${roadmapId}`);
+      if (savedProgressRaw) {
+        setProgress(JSON.parse(savedProgressRaw));
       } else {
-        // 1. Fetch roadmap structure
-        const { data: roadmapData, error: roadmapError } = await supabase
-          .from("roadmaps")
-          .select("*")
-          .eq("id", roadmapId)
-          .single();
-
-        if (roadmapError || !roadmapData) {
-          throw new Error("Learning path (roadmap) not found.");
-        }
-
-        setRoadmap(roadmapData);
-        setNodes(roadmapData.nodes);
-
-        // 2. Fetch progress states
-        const progressQuery = supabase
-          .from("user_progress")
-          .select("node_id, status, quiz_score")
-          .eq("roadmap_id", roadmapId);
-
-        // Query by guest session
-        if (sessionId) {
-          progressQuery.eq("guest_session_id", sessionId);
-        }
-
-        const { data: progressData, error: progressError } = await progressQuery;
-        if (progressError) throw progressError;
-
-        setProgress(progressData || []);
+        // Initialize default progress for demo (first node unlocked)
+        const initialProgress: ProgressState[] = mockRoadmap.nodes.map((n, idx) => ({
+          node_id: n.id,
+          status: idx === 0 ? "unlocked" : "locked"
+        }));
+        setProgress(initialProgress);
+        localStorage.setItem(`yourway_demo_progress_${roadmapId}`, JSON.stringify(initialProgress));
       }
     } catch (err: any) {
-      setError(err.message || "Failed to load workspace.");
+      setError(err.message || "Failed to load offline workspace.");
     } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleDeleteRoadmap = async () => {
-    if (id === "demo") return;
-    if (!confirm("Are you sure you want to permanently delete this pathway from your Codex?")) return;
-
-    setLoading(true);
-    try {
-      if (id.startsWith("local-")) {
-        // 1. Delete from Local Storage
-        localStorage.removeItem(`yourway_local_roadmap_${id}`);
-        localStorage.removeItem(`yourway_local_progress_${id}`);
-        
-        const savedIdsRaw = localStorage.getItem("yourway_roadmap_ids");
-        if (savedIdsRaw) {
-          let savedIds: string[] = JSON.parse(savedIdsRaw);
-          savedIds = savedIds.filter((cid) => cid !== id);
-          localStorage.setItem("yourway_roadmap_ids", JSON.stringify(savedIds));
-        }
-      } else {
-        // 2. Delete from Supabase
-        const { error } = await supabase.from("roadmaps").delete().eq("id", id);
-        if (error) throw error;
-
-        // Also remove ID from local history cache
-        const savedIdsRaw = localStorage.getItem("yourway_roadmap_ids");
-        if (savedIdsRaw) {
-          let savedIds: string[] = JSON.parse(savedIdsRaw);
-          savedIds = savedIds.filter((cid) => cid !== id);
-          localStorage.setItem("yourway_roadmap_ids", JSON.stringify(savedIds));
-        }
-      }
-
-      router.push("/dashboard");
-    } catch (err: any) {
-      console.error("Failed to delete roadmap:", err);
-      alert(`Failed to delete roadmap: ${err.message || err}`);
       setLoading(false);
     }
   };
@@ -220,24 +92,13 @@ export default function RoadmapWorkspace() {
             </button>
             <div>
               <span className="font-pixel text-sm uppercase tracking-wider text-retro-cyan block leading-none font-bold">
-                THE WAY PATHWAY {id === "demo" && "[DEMO MODE]"}
+                THE WAY PATHWAY [OFFLINE DEMO]
               </span>
               <h1 className="font-pixel text-2xl leading-none text-white uppercase mt-1">
                 {loading ? "Loading scientific path..." : roadmap?.topic}
               </h1>
             </div>
           </div>
-
-          {!loading && id !== "demo" && (
-            <button
-              onClick={handleDeleteRoadmap}
-              className="retro-btn text-xs py-1.5 px-3 flex items-center gap-1.5 border-retro-red/50 hover:border-retro-red text-retro-red hover:bg-retro-red/10 cursor-pointer"
-              title="Delete Pathway"
-            >
-              <Trash size={14} />
-              <span className="hidden sm:inline">Delete Pathway</span>
-            </button>
-          )}
         </header>
 
         {/* Main Workspace Area */}
@@ -245,7 +106,7 @@ export default function RoadmapWorkspace() {
           {loading ? (
             <div className="flex-1 h-[450px] border-[3px] border-black border-dashed rounded bg-[#171a21]/50 flex flex-col items-center justify-center gap-3">
               <CircleNotch size={28} className="animate-spin text-text-muted" />
-              <span className="font-pixel text-lg text-text-muted">Loading scientific tree...</span>
+              <span className="font-pixel text-lg text-text-muted">Loading offline tree...</span>
             </div>
           ) : error ? (
             <div className="flex-1 h-[450px] border-3 border-retro-red border-dashed rounded bg-retro-red/5 flex flex-col items-center justify-center gap-3 p-6 text-center">
@@ -278,10 +139,10 @@ export default function RoadmapWorkspace() {
                   paperId={selectedNode.paperId || ""}
                   status={selectedProgress?.status || "locked"}
                   quizScore={selectedProgress?.quiz_score}
-                  guestSessionId={guestSessionId}
                   onClose={() => setSelectedNodeId(null)}
                   onProgressUpdate={handleProgressUpdate}
-                  embeddedPaper={(selectedNode as any).paper}
+                  embeddedPaper={selectedNode.paper}
+                  allNodes={nodes} // pass nodes to compute unlocks
                 />
               )}
             </div>
@@ -289,9 +150,9 @@ export default function RoadmapWorkspace() {
         </main>
       </div>
 
-      {/* Footer Info (Copyright Centered, powered by and instructions removed) */}
+      {/* Footer Info */}
       <footer className="border-t-3 border-black pt-6 mt-12 flex justify-center text-text-muted font-mono text-[10px]">
-        <span>© 2026 YourWay. This is the Way.</span>
+        <span>© 2026 YourWay. Offline Prototype Demo.</span>
       </footer>
     </div>
   );
