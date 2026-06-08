@@ -299,10 +299,6 @@ export default function NodeDrawer({
   const [chatLoading, setChatLoading] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
-  // Sci-Hub State
-  const [resolvingSciHub, setResolvingSciHub] = useState(false);
-  const [sciHubUrl, setSciHubUrl] = useState<string | null>(null);
-
   // Load Paper Metadata when drawer opens/changes
   useEffect(() => {
     fetchPaperDetails();
@@ -314,7 +310,7 @@ export default function NodeDrawer({
     setQuizSubmitted(false);
     setQuizFinalScore(null);
     setQuizError(null);
-    setSciHubUrl(null);
+    setQuizError(null);
     setAiSummary(null);
     setAiSummaryLoading(false);
     setAiSummaryError(null);
@@ -327,12 +323,7 @@ export default function NodeDrawer({
   }, [paperId]);
 
 
-  // Sync pre-resolved Sci-Hub URL if available
-  useEffect(() => {
-    if (paper?.sciHubUrl) {
-      setSciHubUrl(paper.sciHubUrl);
-    }
-  }, [paper]);
+
 
   // Automatically trigger paper summarization if not cached
   useEffect(() => {
@@ -419,31 +410,7 @@ export default function NodeDrawer({
     }
   };
 
-  const handleOpenSciHub = async () => {
-    if (!paper?.doi) return;
 
-    if (sciHubUrl) {
-      window.open(sciHubUrl, "_blank");
-      return;
-    }
-
-    setResolvingSciHub(true);
-    try {
-      const res = await fetch(`/api/scihub?doi=${encodeURIComponent(paper.doi)}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to resolve mirror.");
-
-      setSciHubUrl(data.url);
-      window.open(data.url, "_blank");
-    } catch (err) {
-      console.error("SciHub resolution error:", err);
-      const fallback = `https://sci-hub.se/${paper.doi}`;
-      setSciHubUrl(fallback);
-      window.open(fallback, "_blank");
-    } finally {
-      setResolvingSciHub(false);
-    }
-  };
 
   // Initiate Dynamic MCQ Quiz from server
   const handleStartTrial = async () => {
@@ -849,21 +816,15 @@ export default function NodeDrawer({
 
                 {/* Citation & DOI badges */}
                 <div className="border-t-3 border-black pt-6 flex flex-col gap-3">
-                  {paper.doi && (
-                    <button
-                      onClick={handleOpenSciHub}
-                      disabled={resolvingSciHub}
-                      className="active-press w-full inline-flex items-center justify-center bg-retro-cyan text-black border-3 border-black rounded-md px-4 py-2.5 font-pixel text-base font-bold shadow-[3px_3px_0_0_#0c0d10] hover:bg-retro-cyan/90 active:translate-y-[3px] active:shadow-[0_0_0_0_transparent] cursor-pointer disabled:opacity-50"
+                  {paper.external_pdf_url && (
+                    <a
+                      href={paper.external_pdf_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="active-press w-full inline-flex items-center justify-center bg-retro-cyan text-black border-3 border-black rounded-md px-4 py-2.5 font-pixel text-base font-bold shadow-[3px_3px_0_0_#0c0d10] hover:bg-retro-cyan/90 active:translate-y-[3px] active:shadow-[0_0_0_0_transparent] cursor-pointer"
                     >
-                      {resolvingSciHub ? (
-                        <>
-                          <CircleNotch size={16} className="animate-spin mr-2" />
-                          <span>Locating Mirror...</span>
-                        </>
-                      ) : (
-                        <span>Open in Sci-Hub</span>
-                      )}
-                    </button>
+                      Read Open Access
+                    </a>
                   )}
                   <div className="flex flex-col sm:flex-row gap-3 w-full">
                     {paper.doi && (
@@ -874,16 +835,6 @@ export default function NodeDrawer({
                         className="retro-btn text-xs text-center flex-1 py-2 px-3 justify-center"
                       >
                         DOI Link
-                      </a>
-                    )}
-                    {paper.external_pdf_url && (
-                      <a
-                        href={paper.external_pdf_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="retro-btn text-xs text-center flex-1 py-2 px-3 justify-center"
-                      >
-                        Standard PDF
                       </a>
                     )}
                   </div>

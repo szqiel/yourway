@@ -1,3 +1,5 @@
+import { GoogleGenerativeAI } from "@google/generative-ai";
+
 export interface RoadmapNode {
   id: string;
   title: string;
@@ -5,6 +7,7 @@ export interface RoadmapNode {
   tier: "foundational" | "intermediate" | "advanced";
   prerequisites: string[];
   searchQuery: string;
+  suggestedPaper?: any;
   paperId?: string;
   paper?: {
     id: string;
@@ -14,8 +17,7 @@ export interface RoadmapNode {
     year: number;
     citationCount: number;
     doi: string;
-    pdfUrl: string;
-    sciHubUrl?: string;
+    oaUrl: string; // OpenAlex Open Access URL
   };
 }
 
@@ -26,168 +28,89 @@ export interface QuizQuestion {
   explanation: string;
 }
 
-const BLUESMINDS_API_KEY = process.env.BLUESMINDS_API_KEY || "";
-const BLUESMINDS_MODEL_NAME = process.env.BLUESMINDS_MODEL_NAME || "moonshotai/kimi-k2.6";
-const BLUESMINDS_BASE_URL = "https://api.bluesminds.com/v1";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY || "";
+const GEMINI_MODEL_NAME = "gemini-2.5-flash"; // Requested by user to use version 2 (flash or pro)
 
 /**
- * Helper to parse LLM response text which might be a standard JSON response or an SSE stream chunk list.
- */
-function parseLlmResponseText(text: string): string {
-  text = text.trim();
-  if (text.startsWith("data:")) {
-    let content = "";
-    const lines = text.split("\n");
-    for (const line of lines) {
-      const trimmedLine = line.trim();
-      if (!trimmedLine || trimmedLine === "data: [DONE]") {
-        continue;
-      }
-      if (trimmedLine.startsWith("data:")) {
-        const jsonStr = trimmedLine.substring(5).trim();
-        try {
-          const parsed = JSON.parse(jsonStr);
-          if (parsed.choices && parsed.choices[0]) {
-            const delta = parsed.choices[0].delta;
-            if (delta && delta.content) {
-              content += delta.content;
-            } else if (parsed.choices[0].message && parsed.choices[0].message.content) {
-              content += parsed.choices[0].message.content;
-            }
-          }
-        } catch (e) {
-          // ignore malformed lines
-        }
-      }
-    }
-    return content;
-  } else {
-    const parsed = JSON.parse(text);
-    if (parsed.choices && parsed.choices[0]) {
-      return parsed.choices[0].message.content || "";
-    }
-    throw new Error("No choices returned in standard JSON response.");
-  }
-}
-
-/**
- * Sends a chat completion request to the Bluesminds OpenAI-compatible endpoint.
- * Includes client-side fallback if the primary model is degraded upstream.
+ * Sends a chat completion request to Google Gemini API using robust retries for high demand (429).
  */
 export async function callLlm(
   messages: { role: string; content: string }[],
   systemInstruction?: string,
-  jsonMode: boolean = false
+  jsonMode: boolean = false,
+  maxTokens?: number
 ): Promise<string> {
-  if (!BLUESMINDS_API_KEY) {
-    throw new Error("BLUESMINDS_API_KEY is not configured in environment variables. Please add BLUESMINDS_API_KEY to your .env.local file.");
+  if (!GEMINI_API_KEY) {
+    throw new Error("GEMINI_API_KEY is not configured in environment variables. Please add it to your .env.local file.");
   }
 
-  const formattedMessages: { role: string; content: string }[] = [];
-  if (systemInstruction) {
-    formattedMessages.push({ role: "system", content: systemInstruction });
-  }
-
-  messages.forEach(m => {
-    const role = m.role === "model" || m.role === "assistant" ? "assistant" : "user";
-    formattedMessages.push({ role, content: m.content });
+  const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+  
+  // Initialize the Gemini version 2 model
+  const model = genAI.getGenerativeModel({
+    model: GEMINI_MODEL_NAME,
+    systemInstruction: systemInstruction || undefined,
+    generationConfig: {
+      temperature: 0.3,
+      maxOutputTokens: maxTokens || undefined,
+      responseMimeType: jsonMode ? "application/json" : "text/plain",
+    }
   });
 
-  // Strip any double quotes that might be parsed literally from .env.local
-  const primaryModel = BLUESMINDS_MODEL_NAME.replace(/^"|"$/g, "");
-  
-  // Fallback chain of active models
-  const modelsToTry = [primaryModel];
-  if (!modelsToTry.includes("qwen3.6-plus")) {
-    modelsToTry.push("qwen3.6-plus");
-  }
-  if (!modelsToTry.includes("fallback")) {
-    modelsToTry.push("fallback");
-  }
+  // Convert generic messages to Gemini format
+  const geminiMessages = messages.map(m => ({
+    role: m.role === "model" || m.role === "assistant" ? "model" : "user",
+    parts: [{ text: m.content }]
+  }));
+
+  // We usually send the conversation history. Since GoogleGenerativeAI expects history minus the last message,
+  // we extract the last message to send directly.
+  const lastMessage = geminiMessages.pop()?.parts[0].text || "";
 
   let lastError: any = null;
+  const maxRetries = 3;
+  let delay = 2000; // start with 2s delay
 
-  for (const model of modelsToTry) {
-    const maxRetries = 1;
-    let attempt = 0;
-    let delay = 1500;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const chat = model.startChat({ history: geminiMessages });
+      const result = await chat.sendMessage(lastMessage);
+      const text = result.response.text();
+      return text;
+    } catch (err: any) {
+      lastError = err;
+      const status = err?.status || err?.response?.status;
+      const message = err.message || "";
 
-    while (attempt <= maxRetries) {
-      try {
-        attempt++;
-        const res = await fetch(`${BLUESMINDS_BASE_URL}/chat/completions`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${BLUESMINDS_API_KEY}`,
-          },
-          body: JSON.stringify({
-            model: model,
-            messages: formattedMessages,
-            temperature: 0.3,
-            ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
-          }),
-          signal: AbortSignal.timeout(45000), // 45s timeout
-        });
-
-        const status = res.status;
-        const responseText = await res.text();
-
-        // Check if there is an error object inside the response JSON
-        try {
-          if (!responseText.trim().startsWith("data:")) {
-            const responseData = JSON.parse(responseText);
-            if (responseData && responseData.error) {
-              const errMsg = responseData.error.message || "";
-              const errType = responseData.error.type || "";
-              const errCode = responseData.error.code || "";
-              throw new Error(`API error details: [${errType} / ${errCode}] ${errMsg}`);
-            }
-          }
-        } catch (e: any) {
-          if (e.message.startsWith("API error details:")) {
-            throw e;
-          }
+      // Handle 429 Resource Exhausted (High Demand)
+      if (status === 429 || message.includes("429") || message.includes("Resource Exhausted") || message.includes("quota")) {
+        if (attempt < maxRetries) {
+          console.warn(`[Gemini API] High demand/429 error on attempt ${attempt}. Waiting ${delay}ms before retry...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          delay *= 2; // Exponential backoff
+          continue;
+        } else {
+          throw new Error("Gemini API is currently experiencing extreme high demand. Please try again in a few minutes.");
         }
-
-        if (!res.ok) {
-          if (status === 429) {
-            console.warn(`[LLM] Rate limit or insufficient balance for ${model} (429). Moving to next fallback model.`);
-            break; // Do not retry on 429, fallback immediately to save bill
-          }
-          if (status >= 500) {
-            console.warn(`[LLM] Upstream error ${status} for ${model}. Moving to next fallback model.`);
-            break; // Do not retry on 5xx, fallback immediately
-          }
-          throw new Error(`Bluesminds API error (${status}): ${responseText}`);
-        }
-
-        return parseLlmResponseText(responseText);
-
-      } catch (err: any) {
-        lastError = err;
-        
-        const isUpstreamError = err.message.includes("bad_response_status_code") || 
-                                err.message.includes("do_request_failed") ||
-                                err.message.includes("Invalid model name") ||
-                                err.message.includes("openai_error");
-
-        if (isUpstreamError || err.name === "AbortError" || attempt > maxRetries) {
-          console.warn(`[LLM] Model ${model} failed: ${err.message || err}. Moving to next fallback model.`);
-          break; // break retry loop for this model
-        }
-
-        // Only retry for generic network errors (not 429/5xx)
-        console.warn(`[LLM] Attempt ${attempt} for model ${model} encountered error: ${err.message || err}. Retrying in ${delay}ms...`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-        delay *= 2;
       }
+
+      // If it's a 500 error, we can retry as well
+      if (status >= 500 || message.includes("500") || message.includes("Internal error")) {
+        if (attempt < maxRetries) {
+          console.warn(`[Gemini API] Upstream 500 error on attempt ${attempt}. Waiting ${delay}ms before retry...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          delay *= 2;
+          continue;
+        }
+      }
+
+      // For any other error (e.g., 400 Bad Request, API key invalid), throw immediately without retrying
+      throw new Error(`Gemini API Error: ${message}`);
     }
   }
 
-  throw new Error(`All LLM models in the fallback chain failed. Last error: ${lastError ? (lastError.message || lastError) : "unknown"}`);
+  throw new Error(`Gemini API failed after ${maxRetries} attempts. Last error: ${lastError?.message}`);
 }
-
 
 /**
  * Generates the hierarchical structure of the learning roadmap based on a user's topic.
@@ -205,8 +128,8 @@ Structure the path into three sequential tiers:
 Establish logical dependencies (prerequisites) between nodes.
 
 For each node:
-1. Provide a highly specific, scientific search query that will be used to find a real, highly cited academic paper on Semantic Scholar. Do not include search operators like AND/OR; use natural research queries (e.g. "perovskite solar cells efficiency limits review 2022").
-2. Identify a real, seminal, highly cited academic paper or textbook matching this exact topic. Provide its actual details (Title, Authors, Year, Citation Count, and its real working DOI). DO NOT make up fake DOIs. The DOI must be authentic so that it can be resolved on Sci-Hub (e.g. "10.1016/j.ensm.2021.04.012" or "10.1109/CVPR.2016.90").
+1. Provide a highly specific, scientific search query that will be used to find a real, highly cited academic paper on OpenAlex. Do NOT use search operators (like AND/OR). Use natural, descriptive keywords (e.g. "javascript functional programming fundamentals"). The query MUST be highly relevant to the milestone topic.
+2. Identify a real, seminal, highly cited academic paper or textbook matching this exact topic. Provide its actual details (Title, Authors, Year, Citation Count, and its real working DOI). DO NOT make up fake DOIs.
 
 Enforce output as a JSON object matching this schema:
 {
@@ -223,7 +146,7 @@ Enforce output as a JSON object matching this schema:
         "authors": ["Author Name 1", "Author Name 2"],
         "year": 2020,
         "citationCount": 420,
-        "doi": "Real working DOI of this paper (essential for retrieving from Sci-Hub, e.g. 10.xxxx/xxxxx)"
+        "doi": "Real working DOI of this paper"
       }
     }
   ]
@@ -267,7 +190,7 @@ Enforce output as a JSON object matching this schema:
 }
 `;
 
-  const text = await callLlm([{ role: "user", content: prompt }], undefined, true);
+  const text = await callLlm([{ role: "user", content: prompt }], undefined, true, 1500);
   const data = JSON.parse(text);
   return data.questions;
 }
@@ -278,41 +201,11 @@ Enforce output as a JSON object matching this schema:
 export async function generatePaperSummary(
   title: string,
   abstract: string,
-  fullText?: string,
+  fullText?: string, // Kept for backwards compatibility but unused
   nodeTitle?: string,
   nodeDescription?: string
 ): Promise<string> {
-  let prompt = "";
-  if (fullText && fullText.trim().length > 100) {
-    prompt = `
-You are an expert academic tutor and scientific researcher. Your task is to write a detailed, highly structured Milestone Study Guide (AI Summary) based on the provided full-text contents of the paper: "${title}".
-This guide is specifically designed for a student studying the milestone: "${nodeTitle || title}" (${nodeDescription || ""}).
-
-Here are the extracted text contents of the research paper:
---- START OF PAPER TEXT ---
-${fullText}
---- END OF PAPER TEXT ---
-
-Write a comprehensive, detailed Study Guide in Markdown.
-Structure your guide with the following sections:
-## ## MILESTONE GUIDE: ${nodeTitle?.toUpperCase() || title.toUpperCase()}
-
-### 1. Milestone Concept Alignment
-Explain how this research paper directly connects to the skills and concepts of the milestone: "${nodeTitle || title}". What is the core relevance?
-
-### 2. Deep Dive Methodology & Findings
-Based on the full-text, describe the experimental setup, mathematical models, key datasets, or core methodologies used by the authors. What were the specific, quantified outcomes?
-
-### 3. Essential Takeaways
-List 3-5 critical, non-obvious scientific facts, equations, constants, or design principles from the paper that the student *must* understand to pass this milestone.
-
-### 4. Limitations & Challenges
-What are the limitations, edge cases, bottlenecks, or future research directions discussed in the paper?
-
-Write the guide in clear, concise, academic, yet engaging language. Use standard markdown. Avoid generic summaries; be highly specific to the actual text.
-`;
-  } else {
-    prompt = `
+  const prompt = `
 You are an expert academic tutor and scientific researcher with deep pre-trained knowledge of all published scientific literature.
 Your task is to write a detailed, highly structured Milestone Study Guide (AI Summary) based on the abstract and metadata of the research paper: "${title}" (Abstract: "${abstract}").
 This guide is specifically designed for a student studying the milestone: "${nodeTitle || title}" (${nodeDescription || ""}).
@@ -334,8 +227,8 @@ List 3-5 critical, non-obvious scientific facts, equations, constants, or design
 What are the limitations, edge cases, bottlenecks, or future research directions associated with this study?
 
 Write the guide in clear, concise, academic, yet engaging language. Use standard markdown. Focus on high educational value.
+IMPORTANT: Be concise and direct to save time. Do NOT generate massive repetitive walls of text, but ensure all sections are fully completed and sentences are properly finished.
 `;
-  }
 
-  return await callLlm([{ role: "user", content: prompt }], undefined, false);
+  return await callLlm([{ role: "user", content: prompt }], undefined, false, 2000);
 }

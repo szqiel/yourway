@@ -1,86 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { generateRoadmapStructure, RoadmapNode } from "@/lib/llm";
-import { resolveSciHubUrl } from "@/lib/scihub";
-
-// Helper to fetch paper details from Semantic Scholar API
-async function fetchPaperFromScholar(
-  query: string,
-  fallbackTitle: string,
-  fallbackAbstract: string,
-  suggestedPaper?: any
-): Promise<{
-  paperId: string;
-  title: string;
-  authors: { name: string; authorId?: string }[];
-  abstract: string;
-  year: number;
-  citationCount: number;
-  doi: string;
-  pdfUrl: string;
-}> {
-  try {
-    const url = `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(
-      query
-    )}&limit=1&fields=title,authors,abstract,year,citationCount,externalIds,openAccessPdf`;
-
-    const headers: Record<string, string> = {};
-    if (process.env.SEMANTIC_SCHOLAR_API_KEY) {
-      headers["x-api-key"] = process.env.SEMANTIC_SCHOLAR_API_KEY;
-    }
-
-    const res = await fetch(url, { 
-      headers,
-      signal: AbortSignal.timeout(4000) // 4 seconds timeout for Scholar search
-    });
-    if (res.ok) {
-      const result = await res.json();
-      if (result.data && result.data.length > 0) {
-        const paper = result.data[0];
-        return {
-          paperId: paper.paperId || `scholar-${Math.random().toString(36).substring(2, 9)}`,
-          title: paper.title || fallbackTitle,
-          authors: paper.authors || [{ name: "Unknown Scholar" }],
-          abstract: paper.abstract || `No abstract available for "${paper.title || fallbackTitle}".`,
-          year: paper.year || new Date().getFullYear(),
-          citationCount: paper.citationCount || 0,
-          doi: paper.externalIds?.DOI || "",
-          pdfUrl: paper.openAccessPdf?.url || "",
-        };
-      }
-    }
-  } catch (err) {
-    console.error(`Error querying Scholar API for "${query}":`, err);
-  }
-
-  // Fallback to the AI-suggested real paper first!
-  if (suggestedPaper) {
-    const hash = Math.random().toString(36).substring(2, 8);
-    return {
-      paperId: `suggested-${hash}`,
-      title: suggestedPaper.title || fallbackTitle,
-      authors: suggestedPaper.authors?.map((a: any) => typeof a === "string" ? { name: a } : a) || [{ name: "Research Consensus Group" }],
-      abstract: suggestedPaper.abstract || fallbackAbstract || `This paper details the core fundamentals and experimental findings surrounding ${fallbackTitle}.`,
-      year: suggestedPaper.year || new Date().getFullYear() - 1,
-      citationCount: suggestedPaper.citationCount || 42,
-      doi: suggestedPaper.doi || "",
-      pdfUrl: "",
-    };
-  }
-
-  // Fallback to a synthesized, valid-looking record so the app functions seamlessly
-  const hash = Math.random().toString(36).substring(2, 8);
-  return {
-    paperId: `fallback-${hash}`,
-    title: fallbackTitle,
-    authors: [{ name: "Research Consensus Group" }],
-    abstract: `This paper details the core fundamentals and experimental findings surrounding ${fallbackTitle}. It establishes base definitions and validates the primary hypotheses for subsequent scientific work in this domain.`,
-    year: new Date().getFullYear() - 1,
-    citationCount: 42,
-    doi: `10.1000/fallback.yourway.${hash}`,
-    pdfUrl: "",
-  };
-}
+import { fetchPaperFromOpenAlex } from "@/lib/openalex";
 
 function isSupabaseConfigured(): boolean {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
@@ -134,60 +55,51 @@ export async function POST(req: NextRequest) {
     // 3. Generate the structural roadmap (Skill Tree nodes) via AI
     const rawNodes = await generateRoadmapStructure(topic);
 
-    // 4. Fetch, resolve Sci-Hub URLs, and Cache paper metadata for each node concurrently
-    const enrichedNodes = await Promise.all(
-      rawNodes.map(async (node: any) => {
-        const paper = await fetchPaperFromScholar(node.searchQuery, node.title, node.description, node.suggestedPaper);
+    // 4. Fetch Open Access Paper metadata for each node sequentially using OpenAlex to avoid rate-limiting
+    const enrichedNodes = [];
+    for (const node of rawNodes) {
+      const paper = await fetchPaperFromOpenAlex(node.searchQuery, node.title, node.description, node.suggestedPaper);
 
-        // Pre-resolve the Sci-Hub URL if DOI is available
-        let sciHubUrl = "";
-        if (paper.doi) {
-          try {
-            sciHubUrl = await resolveSciHubUrl(paper.doi);
-          } catch (e) {
-            sciHubUrl = `https://sci-hub.se/${paper.doi}`;
-          }
-        }
-
-        if (hasSupabase) {
-          // Cache paper metadata in Supabase cached_papers
-          const { error: cacheError } = await supabase.from("cached_papers").upsert(
-            {
-              id: paper.paperId,
-              title: paper.title,
-              authors: paper.authors,
-              abstract: paper.abstract,
-              year: paper.year,
-              citation_count: paper.citationCount,
-              external_pdf_url: paper.pdfUrl,
-              doi: paper.doi,
-            },
-            { onConflict: "id" }
-          );
-
-          if (cacheError) {
-            console.error("Failed to cache paper in database:", cacheError);
-          }
-        }
-
-        // Associate the Semantic Scholar Paper ID and embed full paper metadata to the roadmap node
-        return {
-          ...node,
-          paperId: paper.paperId,
-          paper: {
-            id: paper.paperId,
+      if (hasSupabase) {
+        // Cache paper metadata in Supabase cached_papers
+        const { error: cacheError } = await supabase.from("cached_papers").upsert(
+          {
+            id: paper.id,
             title: paper.title,
             authors: paper.authors,
             abstract: paper.abstract,
             year: paper.year,
-            citationCount: paper.citationCount,
+            citation_count: paper.citationCount,
+            external_pdf_url: paper.oaUrl,
             doi: paper.doi,
-            pdfUrl: paper.pdfUrl,
-            sciHubUrl, // Include the pre-resolved Sci-Hub URL
           },
-        };
-      })
-    );
+          { onConflict: "id" }
+        );
+
+        if (cacheError) {
+          console.error("Failed to cache paper in database:", cacheError);
+        }
+      }
+
+      // Associate the OpenAlex Paper ID and embed full paper metadata to the roadmap node
+      enrichedNodes.push({
+        ...node,
+        paperId: paper.id,
+        paper: {
+          id: paper.id,
+          title: paper.title,
+          authors: paper.authors,
+          abstract: paper.abstract,
+          year: paper.year,
+          citationCount: paper.citationCount,
+          doi: paper.doi,
+          oaUrl: paper.oaUrl, // Direct, legal Open Access URL
+        },
+      });
+      
+      // Wait a short delay to respect polite pool limits
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
 
     // 5. Save the roadmap (Store in DB if available, else return local ID)
     if (!hasSupabase) {
