@@ -1,23 +1,6 @@
-// Polyfill canvas-related browser globals for pdfjs-dist / pdf-parse in Node.js server environment
-if (typeof global !== "undefined") {
-  if (!(global as any).DOMMatrix) {
-    (global as any).DOMMatrix = class DOMMatrix {};
-  }
-  if (!(global as any).ImageData) {
-    (global as any).ImageData = class ImageData {};
-  }
-  if (!(global as any).Path2D) {
-    (global as any).Path2D = class Path2D {};
-  }
-}
-
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
-import { downloadPdfFromSciHubOrUrl } from "@/lib/scihub";
 import { generatePaperSummary } from "@/lib/llm";
-const pdf = require("pdf-parse");
-
-
 
 function isSupabaseConfigured(): boolean {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
@@ -48,7 +31,7 @@ export async function POST(req: NextRequest) {
     if (hasSupabase) {
       const { data, error } = await supabase
         .from("cached_papers")
-        .select("ai_summary, external_pdf_url")
+        .select("ai_summary")
         .eq("id", paperId)
         .single();
 
@@ -58,54 +41,13 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 2. Fetch the cached paper details (to get the latest external pdf url if cache lookup failed earlier)
-    let externalPdfUrl = "";
-    if (hasSupabase) {
-      const { data } = await supabase
-        .from("cached_papers")
-        .select("external_pdf_url")
-        .eq("id", paperId)
-        .single();
-      if (data?.external_pdf_url) {
-        externalPdfUrl = data.external_pdf_url;
-      }
-    }
+    // 2. Generate the Summary using LLM based strictly on OpenAlex reconstructed abstract
+    // By relying on the highly detailed abstracts and the AI's internal scientific knowledge,
+    // we bypass slow, expensive, and error-prone PDF downloads entirely.
+    console.log(`Synthesizing Milestone Guide from Abstract metadata for: ${title}`);
+    const summary = await generatePaperSummary(title, abstract, undefined, nodeTitle, nodeDescription);
 
-    // 3. Attempt to download the PDF
-    let pdfText = "";
-    let downloadSuccess = false;
-
-    try {
-      console.log(`Attempting PDF download for DOI: ${doi}, externalUrl: ${externalPdfUrl}`);
-      const pdfBuffer = await downloadPdfFromSciHubOrUrl(doi, externalPdfUrl);
-      console.log(`Download successful. Size: ${pdfBuffer.length} bytes. Parsing PDF...`);
-      
-      const parsedPdf = await pdf(pdfBuffer);
-      pdfText = parsedPdf.text || "";
-      console.log(`PDF successfully parsed. Character count: ${pdfText.length}`);
-      
-      if (pdfText.trim().length > 100) {
-        downloadSuccess = true;
-      } else {
-        console.warn("Parsed PDF text was empty or too short.");
-      }
-    } catch (downloadErr: any) {
-      console.warn("PDF download/parsing failed. Proceeding with parametric fallback.", downloadErr.message || downloadErr);
-    }
-
-    // 4. Generate the Summary using LLM
-    let summary = "";
-    if (downloadSuccess) {
-      // Limit to first 30,000 characters to keep within context limits and low-latency response times
-      const truncatedText = pdfText.substring(0, 30000);
-      console.log("Synthesizing Milestone Guide from full-text paper...");
-      summary = await generatePaperSummary(title, abstract, truncatedText, nodeTitle, nodeDescription);
-    } else {
-      console.log("Synthesizing Milestone Guide from Abstract metadata & Parametric knowledge...");
-      summary = await generatePaperSummary(title, abstract, undefined, nodeTitle, nodeDescription);
-    }
-
-    // 5. Cache the summary back in Supabase
+    // 3. Cache the summary back in Supabase
     if (hasSupabase) {
       const { error: updateError } = await supabase
         .from("cached_papers")
